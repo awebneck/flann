@@ -78,13 +78,27 @@ struct DistanceIndex
 };
 
 
+template <typename DistanceType>
+class ResultSet
+{
+public:
+    virtual ~ResultSet() {}
+
+    virtual bool full() const = 0;
+
+    virtual void addPoint(DistanceType dist, size_t index) = 0;
+
+    virtual DistanceType worstDist() const = 0;
+
+};
+
 /**
  * KNNSimpleResultSet does not ensure that the element it holds are unique.
  * Is used in those cases where the nearest neighbour algorithm used does not
  * attempt to insert the same element multiple times.
  */
 template <typename DistanceType>
-class KNNSimpleResultSet
+class KNNSimpleResultSet : public ResultSet<DistanceType>
 {
 public:
 	typedef DistanceIndex<DistanceType> DistIndex;
@@ -163,7 +177,7 @@ public:
      * @param num_elements Number of elements to copy
      * @param sorted Indicates if results should be sorted
      */
-    void copy(int* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
+    void copy(size_t* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
     {
     	size_t n = std::min(count_, num_elements);
     	for (size_t i=0; i<n; ++i) {
@@ -188,7 +202,7 @@ private:
  * K-Nearest neighbour result set. Ensures that the elements inserted are unique
  */
 template <typename DistanceType>
-class KNNResultSet
+class KNNResultSet : public ResultSet<DistanceType>
 {
 public:
 	typedef DistanceIndex<DistanceType> DistIndex;
@@ -264,7 +278,7 @@ public:
      * @param num_elements Number of elements to copy
      * @param sorted Indicates if results should be sorted
      */
-    void copy(int* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
+    void copy(size_t* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
     {
     	size_t n = std::min(count_, num_elements);
     	for (size_t i=0; i<n; ++i) {
@@ -289,7 +303,7 @@ private:
 
 
 template <typename DistanceType>
-class KNNResultSet2
+class KNNResultSet2 : public ResultSet<DistanceType>
 {
 public:
 	typedef DistanceIndex<DistanceType> DistIndex;
@@ -373,7 +387,7 @@ public:
      * @param num_elements Number of elements to copy
      * @param sorted Indicates if results should be sorted
      */
-    void copy(int* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
+    void copy(size_t* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
     {
     	if (sorted) {
     		// std::sort_heap(dist_index_.begin(), dist_index_.end());
@@ -411,7 +425,7 @@ private:
  * are added to it.
  */
 template <typename DistanceType>
-class RadiusResultSet
+class RadiusResultSet : public ResultSet<DistanceType>
 {
 public:
 	typedef DistanceIndex<DistanceType> DistIndex;
@@ -475,7 +489,7 @@ public:
      * @param num_elements Number of elements to copy
      * @param sorted Indicates if results should be sorted
      */
-    void copy(int* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
+    void copy(size_t* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
     {
     	if (sorted) {
     		// std::sort_heap(dist_index_.begin(), dist_index_.end());
@@ -512,7 +526,7 @@ private:
  * it can hold to a preset capacity.
  */
 template <typename DistanceType>
-class KNNRadiusResultSet
+class KNNRadiusResultSet : public ResultSet<DistanceType>
 {
 public:
 	typedef DistanceIndex<DistanceType> DistIndex;
@@ -597,7 +611,7 @@ public:
      * @param num_elements Number of elements to copy
      * @param sorted Indicates if results should be sorted
      */
-    void copy(int* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
+    void copy(size_t* indices, DistanceType* dists, size_t num_elements, bool sorted = true)
     {
     	if (sorted) {
     		// std::sort_heap(dist_index_.begin(), dist_index_.end());
@@ -637,7 +651,7 @@ private:
  */
 
 template <typename DistanceType>
-class CountRadiusResultSet
+class CountRadiusResultSet : public ResultSet<DistanceType>
 {
     DistanceType radius;
     size_t count;
@@ -689,7 +703,7 @@ public:
 /** Class that holds the k NN neighbors
  */
 template<typename DistanceType>
-class UniqueResultSet
+class UniqueResultSet : public ResultSet<DistanceType>
 {
 public:
     struct DistIndex
@@ -725,7 +739,7 @@ public:
      * @param dist pointer to a C array of distances
      * @param n_neighbors the number of neighbors to copy
      */
-    void copy(int* indices, DistanceType* dist, int n_neighbors, bool sorted = true)
+    void copy(size_t* indices, DistanceType* dist, int n_neighbors, bool sorted = true)
     {
     	if (n_neighbors<0) n_neighbors = dist_indices_.size();
     	int i = 0;

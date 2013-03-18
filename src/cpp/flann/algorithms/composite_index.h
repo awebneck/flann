@@ -68,12 +68,13 @@ struct CompositeIndexParams : public IndexParams
  * as some of the neighbours that are missed by one index are found by the other.
  */
 template <typename Distance>
-class CompositeIndex : public NNIndex<CompositeIndex<Distance>, typename Distance::ElementType, typename Distance::ResultType>
+class CompositeIndex : public NNIndex<Distance>
 {
 public:
     typedef typename Distance::ElementType ElementType;
     typedef typename Distance::ResultType DistanceType;
-    typedef NNIndex<CompositeIndex<Distance>, ElementType, DistanceType> BaseClass;
+
+    typedef NNIndex<Distance> BaseClass;
 
     typedef bool needs_kdtree_distance;
 
@@ -85,7 +86,7 @@ public:
      * @return
      */
     CompositeIndex(const IndexParams& params = CompositeIndexParams(), Distance d = Distance()) :
-    	BaseClass(params)
+    	BaseClass(params, d)
     {
         kdtree_index_ = new KDTreeIndex<Distance>(params, d);
         kmeans_index_ = new KMeansIndex<Distance>(params, d);
@@ -93,20 +94,32 @@ public:
     }
 
     CompositeIndex(const Matrix<ElementType>& inputData, const IndexParams& params = CompositeIndexParams(),
-                   Distance d = Distance()) : BaseClass(params)
+                   Distance d = Distance()) : BaseClass(params, d)
     {
         kdtree_index_ = new KDTreeIndex<Distance>(inputData, params, d);
         kmeans_index_ = new KMeansIndex<Distance>(inputData, params, d);
-
     }
 
-    CompositeIndex(const CompositeIndex&);
-    CompositeIndex& operator=(const CompositeIndex&);
+    CompositeIndex(const CompositeIndex& other) : BaseClass(other),
+    	kmeans_index_(other.kmeans_index_), kdtree_index_(other.kdtree_index_)
+    {
+    }
+
+    CompositeIndex& operator=(CompositeIndex other)
+    {
+    	this->swap(other);
+    	return *this;
+    }
 
     virtual ~CompositeIndex()
     {
         delete kdtree_index_;
         delete kmeans_index_;
+    }
+
+    BaseClass* clone() const
+    {
+    	return new CompositeIndex(*this);
     }
 
     /**
@@ -141,6 +154,7 @@ public:
         return kmeans_index_->usedMemory() + kdtree_index_->usedMemory();
     }
 
+    using NNIndex<Distance>::buildIndex;
     /**
      * \brief Builds the index
      */
@@ -188,12 +202,29 @@ public:
     /**
      * \brief Method that searches for nearest-neighbours
      */
-    template <typename ResultSet>
-    void findNeighbors(ResultSet& result, const ElementType* vec, const SearchParams& searchParams)
+    void findNeighbors(ResultSet<DistanceType>& result, const ElementType* vec, const SearchParams& searchParams) const
     {
         kmeans_index_->findNeighbors(result, vec, searchParams);
         kdtree_index_->findNeighbors(result, vec, searchParams);
     }
+
+protected:
+    void swap(CompositeIndex& other)
+    {
+    	std::swap(kmeans_index_, other.kmeans_index_);
+    	std::swap(kdtree_index_, other.kdtree_index_);
+    }
+
+    void buildIndexImpl()
+    {
+        /* nothing to do here */
+    }
+
+    void freeIndex()
+    {
+        /* nothing to do here */
+    }
+
 
 private:
     /** The k-means index */

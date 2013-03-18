@@ -83,13 +83,16 @@ class FLANNParameters(CustomStructure):
     _fields_ = [
         ('algorithm', c_int),
         ('checks', c_int),
-        ('cb_index', c_float),
         ('eps', c_float),
+        ('sorted', c_int),
+        ('max_neighbors', c_int),
+        ('cores', c_int),
         ('trees', c_int),
         ('leaf_max_size', c_int),
         ('branching', c_int),
         ('iterations', c_int),
         ('centers_init', c_int),
+        ('cb_index', c_float),
         ('target_precision', c_float),
         ('build_weight', c_float),
         ('memory_weight', c_float),
@@ -104,12 +107,15 @@ class FLANNParameters(CustomStructure):
         'algorithm' : 'kdtree',
         'checks' : 32,
         'eps' : 0.0,
-        'cb_index' : 0.5,
+        'sorted' : 1,
+        'max_neighbors' : -1,
+        'cores' : 0,
         'trees' : 1,
         'leaf_max_size' : 4,
         'branching' : 32,
         'iterations' : 5,
         'centers_init' : 'random',
+        'cb_index' : 0.5,
         'target_precision' : 0.9,
         'build_weight' : 0.01,
         'memory_weight' : 0.0,
@@ -121,7 +127,7 @@ class FLANNParameters(CustomStructure):
         'random_seed' : -1
   }
     _translation_ = {
-            "algorithm"     : {"linear"    : 0, "kdtree"    : 1, "kmeans"    : 2, "composite" : 3, "kdtree_simple" : 4, "saved": 254, "autotuned" : 255, "default"   : 1},
+            "algorithm"     : {"linear"    : 0, "kdtree"    : 1, "kmeans"    : 2, "composite" : 3, "kdtree_single" : 4, "hierarchical": 5, "lsh": 6, "saved": 254, "autotuned" : 255, "default"   : 1},
         "centers_init"  : {"random"    : 0, "gonzales"  : 1, "kmeanspp"  : 2, "default"   : 0},
         "log_level"     : {"none"      : 0, "fatal"     : 1, "error"     : 2, "warning"   : 3, "info"      : 4, "default"   : 2}
     }

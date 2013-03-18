@@ -46,32 +46,43 @@ struct LinearIndexParams : public IndexParams
 };
 
 template <typename Distance>
-class LinearIndex : public NNIndex<LinearIndex<Distance>, typename Distance::ElementType, typename Distance::ResultType>
+class LinearIndex : public NNIndex<Distance>
 {
 public:
 
     typedef typename Distance::ElementType ElementType;
     typedef typename Distance::ResultType DistanceType;
-    typedef NNIndex<LinearIndex<Distance>, ElementType, DistanceType> BaseClass;
 
+    typedef NNIndex<Distance> BaseClass;
 
     LinearIndex(const IndexParams& params = LinearIndexParams(), Distance d = Distance()) :
-                	BaseClass(params), distance_(d)
+    	BaseClass(params, d)
     {
     }
 
     LinearIndex(const Matrix<ElementType>& input_data, const IndexParams& params = LinearIndexParams(), Distance d = Distance()) :
-                	BaseClass(params), distance_(d)
+    	BaseClass(params, d)
     {
-        bool copy_dataset = get_param(index_params_, "copy_dataset", false);
-        setDataset(input_data, copy_dataset);
+        setDataset(input_data);
     }
 
-    ~LinearIndex()
+    LinearIndex(const LinearIndex& other) : BaseClass(other)
     {
-        if (ownDataset_) {
-            delete[] dataset_.ptr();
-        }
+    }
+
+    LinearIndex& operator=(LinearIndex other)
+    {
+    	this->swap(other);
+    	return *this;
+    }
+
+    virtual ~LinearIndex()
+    {
+    }
+
+    BaseClass* clone() const
+    {
+    	return new LinearIndex(*this);
     }
 
     void addPoints(const Matrix<ElementType>& points, float rebuild_threshold = 2)
@@ -79,10 +90,6 @@ public:
         assert(points.cols==veclen_);
         extendDataset(points);
     }
-
-    
-    LinearIndex(const LinearIndex&);
-    LinearIndex& operator=(const LinearIndex&);
 
     flann_algorithm_t getType() const
     {
@@ -95,47 +102,60 @@ public:
         return 0;
     }
 
-    void buildIndex()
+    template<typename Archive>
+    void serialize(Archive& ar)
+    {
+    	ar.setObject(this);
+
+    	ar & *static_cast<NNIndex<Distance>*>(this);
+
+    	if (Archive::is_loading::value) {
+            index_params_["algorithm"] = getType();
+    	}
+    }
+
+    void saveIndex(FILE* stream)
+    {
+    	serialization::SaveArchive sa(stream);
+    	sa & *this;
+    }
+
+    void loadIndex(FILE* stream)
+    {
+    	serialization::LoadArchive la(stream);
+    	la & *this;
+    }
+
+    void findNeighbors(ResultSet<DistanceType>& resultSet, const ElementType* vec, const SearchParams& /*searchParams*/) const
+    {
+    	if (removed_) {
+    		for (size_t i = 0; i < points_.size(); ++i) {
+    			if (removed_points_.test(i)) continue;
+    			DistanceType dist = distance_(points_[i], vec, veclen_);
+    			resultSet.addPoint(dist, i);
+    		}
+    	}
+    	else {
+    		for (size_t i = 0; i < points_.size(); ++i) {
+    			DistanceType dist = distance_(points_[i], vec, veclen_);
+    			resultSet.addPoint(dist, i);
+    		}
+    	}
+    }
+protected:
+    void buildIndexImpl()
     {
         /* nothing to do here for linear search */
     }
 
-    void saveIndex(FILE*)
+    void freeIndex()
     {
         /* nothing to do here for linear search */
     }
-
-
-    void loadIndex(FILE*)
-    {
-        /* nothing to do here for linear search */
-
-        index_params_["algorithm"] = getType();
-    }
-
-    template <typename ResultSet>
-    void findNeighbors(ResultSet& resultSet, const ElementType* vec, const SearchParams& /*searchParams*/)
-    {
-        for (size_t i = 0; i < dataset_.rows; ++i) {
-        	if (removed_points_.test(i)) continue;
-            DistanceType dist = distance_(dataset_[i], vec, dataset_.cols);
-            resultSet.addPoint(dist, i);
-        }
-    }
-
 
 private:
-    /** Index distance */
-    Distance distance_;
 
-    using BaseClass::removed_points_;
-    using BaseClass::dataset_;
-    using BaseClass::ownDataset_;
-    using BaseClass::index_params_;
-    using BaseClass::size_;
-    using BaseClass::veclen_;
-    using BaseClass::extendDataset;
-    using BaseClass::setDataset;
+    USING_BASECLASS_SYMBOLS
 };
 
 }

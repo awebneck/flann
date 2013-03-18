@@ -75,19 +75,20 @@ struct LshIndexParams : public IndexParams
  * for nearest-neighbor matching.
  */
 template<typename Distance>
-class LshIndex : public NNIndex<LshIndex<Distance>,typename Distance::ElementType, typename Distance::ResultType>
+class LshIndex : public NNIndex<Distance>
 {
 public:
     typedef typename Distance::ElementType ElementType;
     typedef typename Distance::ResultType DistanceType;
-    typedef NNIndex<LshIndex<Distance>, ElementType, DistanceType> BaseClass;
+
+    typedef NNIndex<Distance> BaseClass;
 
     /** Constructor
      * @param params parameters passed to the LSH algorithm
      * @param d the distance used
      */
     LshIndex(const IndexParams& params = LshIndexParams(), Distance d = Distance()) :
-        BaseClass(params), distance_(d)
+    	BaseClass(params, d)
     {
         table_number_ = get_param<unsigned int>(index_params_,"table_number",12);
         key_size_ = get_param<unsigned int>(index_params_,"key_size",20);
@@ -103,7 +104,7 @@ public:
      * @param d the distance used
      */
     LshIndex(const Matrix<ElementType>& input_data, const IndexParams& params = LshIndexParams(), Distance d = Distance()) :
-        BaseClass(params), distance_(d)
+    	BaseClass(params, d)
     {
         table_number_ = get_param<unsigned int>(index_params_,"table_number",12);
         key_size_ = get_param<unsigned int>(index_params_,"key_size",20);
@@ -111,53 +112,52 @@ public:
 
         fill_xor_mask(0, key_size_, multi_probe_level_, xor_masks_);
 
-        bool copy_dataset = get_param(index_params_, "copy_dataset", false);
-        setDataset(input_data, copy_dataset);
+        setDataset(input_data);
     }
 
-    
-    ~LshIndex()
+    LshIndex(const LshIndex& other) : BaseClass(other),
+    	tables_(other.tables_),
+    	table_number_(other.table_number_),
+    	key_size_(other.key_size_),
+    	multi_probe_level_(other.multi_probe_level_),
+    	xor_masks_(other.xor_masks_)
     {
-        if (ownDataset_) {
-            delete[] dataset_.ptr();
-        }
-    }
-
-    LshIndex(const LshIndex&);
-    LshIndex& operator=(const LshIndex&);
-
-    /**
-     * Builds the index
-     */
-    void buildIndex()
-    {
-        tables_.resize(table_number_);
-        for (unsigned int i = 0; i < table_number_; ++i) {
-            lsh::LshTable<ElementType>& table = tables_[i];
-            table = lsh::LshTable<ElementType>(veclen_, key_size_);
-
-            // Add the features to the table
-            table.add(dataset_);
-        }
-        
-        size_at_build_ = dataset_.rows;;
     }
     
+    LshIndex& operator=(LshIndex other)
+    {
+    	this->swap(other);
+    	return *this;
+    }
+
+    virtual ~LshIndex()
+    {
+    	freeIndex();
+    }
+
+
+    BaseClass* clone() const
+    {
+    	return new LshIndex(*this);
+    }
+    
+    using BaseClass::buildIndex;
+
     void addPoints(const Matrix<ElementType>& points, float rebuild_threshold = 2)
     {
         assert(points.cols==veclen_);
-        size_t old_size = dataset_.rows;
+        size_t old_size = size_;
 
         extendDataset(points);
         
-        if (rebuild_threshold>1 && size_at_build_*rebuild_threshold<dataset_.rows) {
+        if (rebuild_threshold>1 && size_at_build_*rebuild_threshold<size_) {
             buildIndex();
         }
         else {
             for (unsigned int i = 0; i < table_number_; ++i) {
                 lsh::LshTable<ElementType>& table = tables_[i];                
-                for (size_t i=0;i<points.rows;++i) {
-                    table.add(old_size+i, points[i]);
+                for (size_t i=old_size;i<size_;++i) {
+                    table.add(i, points_[i]);
                 }            
             }
         }
@@ -170,27 +170,38 @@ public:
     }
 
 
+    template<typename Archive>
+    void serialize(Archive& ar)
+    {
+    	ar.setObject(this);
+
+    	ar & *static_cast<NNIndex<Distance>*>(this);
+
+    	ar & table_number_;
+    	ar & key_size_;
+    	ar & multi_probe_level_;
+
+    	ar & xor_masks_;
+    	ar & tables_;
+
+    	if (Archive::is_loading::value) {
+            index_params_["algorithm"] = getType();
+            index_params_["table_number"] = table_number_;
+            index_params_["key_size"] = key_size_;
+            index_params_["multi_probe_level"] = multi_probe_level_;
+    	}
+    }
+
     void saveIndex(FILE* stream)
     {
-        save_value(stream,table_number_);
-        save_value(stream,key_size_);
-        save_value(stream,multi_probe_level_);
-//         save_value(stream, dataset_);
+    	serialization::SaveArchive sa(stream);
+    	sa & *this;
     }
 
     void loadIndex(FILE* stream)
     {
-        load_value(stream, table_number_);
-        load_value(stream, key_size_);
-        load_value(stream, multi_probe_level_);
-//         load_value(stream, dataset_);
-        // Building the index is so fast we can afford not storing it
-        buildIndex();
-
-        index_params_["algorithm"] = getType();
-        index_params_["table_number"] = table_number_;
-        index_params_["key_size"] = key_size_;
-        index_params_["multi_probe_level"] = multi_probe_level_;
+    	serialization::LoadArchive la(stream);
+    	la & *this;
     }
 
     /**
@@ -199,7 +210,7 @@ public:
      */
     int usedMemory() const
     {
-        return dataset_.rows * sizeof(int);
+        return size_ * sizeof(int);
     }
 
     /**
@@ -211,10 +222,10 @@ public:
      * \param[in] params Search parameters
      */
     int knnSearch(const Matrix<ElementType>& queries,
-    					Matrix<int>& indices,
+    					Matrix<size_t>& indices,
     					Matrix<DistanceType>& dists,
     					size_t knn,
-    					const SearchParams& params)
+    					const SearchParams& params) const
     {
         assert(queries.cols == veclen_);
         assert(indices.rows >= queries.rows);
@@ -224,21 +235,33 @@ public:
 
         int count = 0;
         if (params.use_heap==FLANN_True) {
-        	KNNUniqueResultSet<DistanceType> resultSet(knn);
-        	for (size_t i = 0; i < queries.rows; i++) {
-        		resultSet.clear();
-        		findNeighbors(resultSet, queries[i], params);
-        		resultSet.copy(indices[i], dists[i], knn, params.sorted);
-        		count += resultSet.size();
+#pragma omp parallel num_threads(params.cores)
+        	{
+        		KNNUniqueResultSet<DistanceType> resultSet(knn);
+#pragma omp for schedule(static) reduction(+:count)
+        		for (int i = 0; i < (int)queries.rows; i++) {
+        			resultSet.clear();
+        			findNeighbors(resultSet, queries[i], params);
+        			size_t n = std::min(resultSet.size(), knn);
+        			resultSet.copy(indices[i], dists[i], n, params.sorted);
+        			indices_to_ids(indices[i], indices[i], n);
+        			count += n;
+        		}
         	}
         }
         else {
-        	KNNResultSet<DistanceType> resultSet(knn);
-        	for (size_t i = 0; i < queries.rows; i++) {
-        		resultSet.clear();
-        		findNeighbors(resultSet, queries[i], params);
-        		resultSet.copy(indices[i], dists[i], knn, params.sorted);
-        		count += resultSet.size();
+#pragma omp parallel num_threads(params.cores)
+        	{
+        		KNNResultSet<DistanceType> resultSet(knn);
+#pragma omp for schedule(static) reduction(+:count)
+        		for (int i = 0; i < (int)queries.rows; i++) {
+        			resultSet.clear();
+        			findNeighbors(resultSet, queries[i], params);
+        			size_t n = std::min(resultSet.size(), knn);
+        			resultSet.copy(indices[i], dists[i], n, params.sorted);
+        			indices_to_ids(indices[i], indices[i], n);
+        			count += n;
+        		}
         	}
         }
 
@@ -254,10 +277,10 @@ public:
      * \param[in] params Search parameters
      */
     int knnSearch(const Matrix<ElementType>& queries,
-					std::vector< std::vector<int> >& indices,
+					std::vector< std::vector<size_t> >& indices,
 					std::vector<std::vector<DistanceType> >& dists,
     				size_t knn,
-    				const SearchParams& params)
+    				const SearchParams& params) const
     {
         assert(queries.cols == veclen_);
 		if (indices.size() < queries.rows ) indices.resize(queries.rows);
@@ -265,31 +288,41 @@ public:
 
 		int count = 0;
 		if (params.use_heap==FLANN_True) {
-			KNNUniqueResultSet<DistanceType> resultSet(knn);
-			for (size_t i = 0; i < queries.rows; i++) {
-				resultSet.clear();
-				findNeighbors(resultSet, queries[i], params);
-				size_t n = std::min(resultSet.size(), knn);
-				indices[i].resize(n);
-				dists[i].resize(n);
-				if (n > 0) {
-					resultSet.copy(&indices[i][0], &dists[i][0], n, params.sorted);
+#pragma omp parallel num_threads(params.cores)
+			{
+				KNNUniqueResultSet<DistanceType> resultSet(knn);
+#pragma omp for schedule(static) reduction(+:count)
+				for (int i = 0; i < (int)queries.rows; i++) {
+					resultSet.clear();
+					findNeighbors(resultSet, queries[i], params);
+					size_t n = std::min(resultSet.size(), knn);
+					indices[i].resize(n);
+					dists[i].resize(n);
+					if (n > 0) {
+						resultSet.copy(&indices[i][0], &dists[i][0], n, params.sorted);
+						indices_to_ids(&indices[i][0], &indices[i][0], n);
+					}
+					count += n;
 				}
-				count += n;
 			}
 		}
 		else {
-			KNNResultSet<DistanceType> resultSet(knn);
-			for (size_t i = 0; i < queries.rows; i++) {
-				resultSet.clear();
-				findNeighbors(resultSet, queries[i], params);
-				size_t n = std::min(resultSet.size(), knn);
-				indices[i].resize(n);
-				dists[i].resize(n);
-				if (n > 0) {
-					resultSet.copy(&indices[i][0], &dists[i][0], n, params.sorted);
+#pragma omp parallel num_threads(params.cores)
+			{
+				KNNResultSet<DistanceType> resultSet(knn);
+#pragma omp for schedule(static) reduction(+:count)
+				for (int i = 0; i < (int)queries.rows; i++) {
+					resultSet.clear();
+					findNeighbors(resultSet, queries[i], params);
+					size_t n = std::min(resultSet.size(), knn);
+					indices[i].resize(n);
+					dists[i].resize(n);
+					if (n > 0) {
+						resultSet.copy(&indices[i][0], &dists[i][0], n, params.sorted);
+						indices_to_ids(&indices[i][0], &indices[i][0], n);
+					}
+					count += n;
 				}
-				count += n;
 			}
 		}
 
@@ -305,11 +338,38 @@ public:
      *     vec = the vector for which to search the nearest neighbors
      *     maxCheck = the maximum number of restarts (in a best-bin-first manner)
      */
-    template <typename ResultSet>
-    void findNeighbors(ResultSet& result, const ElementType* vec, const SearchParams& /*searchParams*/)
+    void findNeighbors(ResultSet<DistanceType>& result, const ElementType* vec, const SearchParams& /*searchParams*/) const
     {
         getNeighbors(vec, result);
     }
+
+protected:
+
+    /**
+     * Builds the index
+     */
+    void buildIndexImpl()
+    {
+        tables_.resize(table_number_);
+        std::vector<std::pair<size_t,ElementType*> > features;
+        features.reserve(points_.size());
+        for (size_t i=0;i<points_.size();++i) {
+        	features.push_back(std::make_pair(i, points_[i]));
+        }
+        for (unsigned int i = 0; i < table_number_; ++i) {
+            lsh::LshTable<ElementType>& table = tables_[i];
+            table = lsh::LshTable<ElementType>(veclen_, key_size_);
+
+            // Add the features to the table
+            table.add(features);
+        }
+    }
+
+    void freeIndex()
+    {
+        /* nothing to do here */
+    }
+
 
 private:
     /** Defines the comparator on score and index
@@ -374,8 +434,8 @@ private:
 
                     // Process the rest of the candidates
                     for (; training_index < last_training_index; ++training_index) {
-                    	if (removed_points_.test(*training_index)) continue;
-                        hamming_distance = distance_(vec, dataset_[*training_index], dataset_.cols);
+                    	if (removed_ && removed_points_.test(*training_index)) continue;
+                        hamming_distance = distance_(vec, points_[*training_index].point, veclen_);
 
                         if (hamming_distance < worst_score) {
                             // Insert the new element
@@ -413,9 +473,9 @@ private:
 
                     // Process the rest of the candidates
                     for (; training_index < last_training_index; ++training_index) {
-                    	if (removed_points_.test(*training_index)) continue;
+                    	if (removed_ && removed_points_.test(*training_index)) continue;
                         // Compute the Hamming distance
-                        hamming_distance = distance_(vec, dataset_[*training_index], dataset_.cols);
+                        hamming_distance = distance_(vec, points_[*training_index].point, veclen_);
                         if (hamming_distance < radius) score_index_heap.push_back(ScoreIndexPair(hamming_distance, training_index));
                     }
                 }
@@ -427,8 +487,7 @@ private:
      * This is a slower version than the above as it uses the ResultSet
      * @param vec the feature to analyze
      */
-    template<typename ResultSet>
-    void getNeighbors(const ElementType* vec, ResultSet& result)
+    void getNeighbors(const ElementType* vec, ResultSet<DistanceType>& result) const
     {
         typename std::vector<lsh::LshTable<ElementType> >::const_iterator table = tables_.begin();
         typename std::vector<lsh::LshTable<ElementType> >::const_iterator table_end = tables_.end();
@@ -448,21 +507,30 @@ private:
 
                 // Process the rest of the candidates
                 for (; training_index < last_training_index; ++training_index) {
-                	if (removed_points_.test(*training_index)) continue;
+                	if (removed_ && removed_points_.test(*training_index)) continue;
                     // Compute the Hamming distance
-                    hamming_distance = distance_(vec, dataset_[*training_index], dataset_.cols);
+                    hamming_distance = distance_(vec, points_[*training_index], veclen_);
                     result.addPoint(hamming_distance, *training_index);
                 }
             }
         }
     }
 
+
+    void swap(LshIndex& other)
+    {
+    	BaseClass::swap(other);
+    	std::swap(tables_, other.tables_);
+    	std::swap(size_at_build_, other.size_at_build_);
+    	std::swap(table_number_, other.table_number_);
+    	std::swap(key_size_, other.key_size_);
+    	std::swap(multi_probe_level_, other.multi_probe_level_);
+    	std::swap(xor_masks_, other.xor_masks_);
+    }
+
     /** The different hash tables */
     std::vector<lsh::LshTable<ElementType> > tables_;
     
-    /** Number of features in the dataset when the index was last built. */
-    size_t size_at_build_;
-
     /** table number */
     unsigned int table_number_;
     /** key size */
@@ -473,16 +541,7 @@ private:
     /** The XOR masks to apply to a key to get the neighboring buckets */
     std::vector<lsh::BucketKey> xor_masks_;
 
-    Distance distance_;
-
-    using BaseClass::removed_points_;
-    using BaseClass::dataset_;
-    using BaseClass::ownDataset_;
-    using BaseClass::size_;
-    using BaseClass::veclen_;
-    using BaseClass::index_params_;
-    using BaseClass::extendDataset;
-    using BaseClass::setDataset;
+    USING_BASECLASS_SYMBOLS
 };
 }
 
